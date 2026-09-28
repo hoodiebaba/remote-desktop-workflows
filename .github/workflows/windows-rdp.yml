@@ -29,10 +29,21 @@ jobs:
           Write-Host "🚀 WINDOWS RDP - CLOUDFLARE TUNNEL"
           Write-Host "============================================"
           Write-Host ""
-          Start-Process PowerShell -ArgumentList '-NoExit -Command "cloudflared tunnel --url tcp://localhost:3389"'
-          Start-Sleep -Seconds 15
+          # Start cloudflared as background job with output to file
+          Start-Job -Name cf -ScriptBlock {
+            cloudflared tunnel --url tcp://localhost:3389 2>&1 | Tee-Object -FilePath C:\tunnel.log
+          } | Out-Null
+          Start-Sleep -Seconds 25
           Write-Host ""
-          Write-Host "✅ TUNNEL STARTED! Check separate PowerShell window for URL"
+          Write-Host "============================================"
+          Write-Host "🌐 CLOUDFLARE TUNNEL URL (copy this):"
+          Write-Host "============================================"
+          if (Test-Path C:\tunnel.log) {
+            Get-Content C:\tunnel.log | Select-String "trycloudflare.com"
+          } else {
+            Write-Host "❌ tunnel.log not found"
+          }
+          Write-Host "============================================"
           Write-Host ""
           Write-Host "📋 CONNECTION DETAILS:"
           Write-Host "   USERNAME: runneradmin"
@@ -45,7 +56,13 @@ jobs:
       - name: Keep Session Alive
         run: |
           Write-Host "⏳ Session Active - Keeping alive..."
+          # Keep tunnel alive by tailing log periodically
           while ($true) {
             Start-Sleep -Seconds 60
-            Write-Host "✓ Active - $(Get-Date -Format 'HH:mm:ss')"
+            if (Test-Path C:\tunnel.log) {
+              $url = Get-Content C:\tunnel.log | Select-String "trycloudflare.com" | Select-Object -First 1
+              Write-Host "✓ Active - $(Get-Date -Format 'HH:mm:ss') - URL: $url"
+            } else {
+              Write-Host "✓ Active - $(Get-Date -Format 'HH:mm:ss')"
+            }
           }
