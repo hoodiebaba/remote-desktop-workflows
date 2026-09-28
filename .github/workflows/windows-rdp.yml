@@ -15,54 +15,58 @@ jobs:
         run: |
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
-          Write-Host "✅ RDP Enabled Successfully!"
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 0
+          Restart-Service TermService -Force
+          Start-Sleep -Seconds 3
+          netstat -ano | findstr :3389
+          Write-Host "✅ RDP Enabled!"
 
       - name: Set Administrator Password
         run: |
           Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "P@ssw0rd123!" -Force)
           Write-Host "✅ Password Configured!"
 
-      - name: Start Cloudflare Tunnel
+      - name: Start Cloudflare Tunnel (detached)
         run: |
-          Write-Host "============================================"
-          Write-Host "🚀 WINDOWS RDP - CLOUDFLARE TUNNEL"
-          Write-Host "============================================"
-          Write-Host ""
-          # Start cloudflared as background job with output to file
-          Start-Job -Name cf -ScriptBlock {
-            cloudflared tunnel --url tcp://localhost:3389 2>&1 | Tee-Object -FilePath C:\tunnel.log
-          } | Out-Null
+          Write-Host "Starting tunnel..."
+          # Run cloudflared as a detached background process
+          Start-Process -FilePath "cloudflared" `
+            -ArgumentList "tunnel","--url","tcp://localhost:3389","--no-autoupdate" `
+            -RedirectStandardOutput "C:\tunnel.log" `
+            -RedirectStandardError "C:\tunnel-err.log" `
+            -WindowStyle Hidden
           Start-Sleep -Seconds 25
-          Write-Host ""
+
           Write-Host "============================================"
-          Write-Host "🌐 CLOUDFLARE TUNNEL URL (copy this):"
+          Write-Host "🌐 CLOUDFLARE TUNNEL URL:"
           Write-Host "============================================"
-          if (Test-Path C:\tunnel.log) {
-            Get-Content C:\tunnel.log | Select-String "trycloudflare.com"
+          $url = Select-String -Path "C:\tunnel.log","C:\tunnel-err.log" -Pattern "trycloudflare.com" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($url) {
+            Write-Host $url.Line
           } else {
-            Write-Host "❌ tunnel.log not found"
+            Write-Host "Log contents:"
+            Get-Content C:\tunnel.log -ErrorAction SilentlyContinue
+            Get-Content C:\tunnel-err.log -ErrorAction SilentlyContinue
           }
-          Write-Host "============================================"
-          Write-Host ""
-          Write-Host "📋 CONNECTION DETAILS:"
-          Write-Host "   USERNAME: runneradmin"
-          Write-Host "   PASSWORD: P@ssw0rd123!"
-          Write-Host "   OS: Windows Server 2022"
-          Write-Host "   CPU: 4 cores"
-          Write-Host "   RAM: 16GB"
           Write-Host "============================================"
 
       - name: Keep Session Alive
         run: |
-          Write-Host "⏳ Session Active - Keeping alive..."
-          # Keep tunnel alive by tailing log periodically
-          while ($true) {
+          Write-Host "⏳ Keeping session alive for 6 hours..."
+          $start = Get-Date
+          while (((Get-Date) - $start).TotalHours -lt 5.9) {
             Start-Sleep -Seconds 60
-            if (Test-Path C:\tunnel.log) {
-              $url = Get-Content C:\tunnel.log | Select-String "trycloudflare.com" | Select-Object -First 1
-              Write-Host "✓ Active - $(Get-Date -Format 'HH:mm:ss') - URL: $url"
+            $cf = Get-Process cloudflared -ErrorAction SilentlyContinue
+            if ($cf) {
+              Write-Host "✓ $(Get-Date -Format 'HH:mm:ss') - cloudflared running (PID $($cf.Id))"
             } else {
-              Write-Host "✓ Active - $(Get-Date -Format 'HH:mm:ss')"
+              Write-Host "❌ $(Get-Date -Format 'HH:mm:ss') - cloudflared DIED, restarting..."
+              Start-Process -FilePath "cloudflared" `
+                -ArgumentList "tunnel","--url","tcp://localhost:3389","--no-autoupdate" `
+                -RedirectStandardOutput "C:\tunnel.log" `
+                -RedirectStandardError "C:\tunnel-err.log" `
+                -WindowStyle Hidden
+              Start-Sleep -Seconds 20
+              Get-Content C:\tunnel.log,C:\tunnel-err.log -ErrorAction SilentlyContinue | Select-String "trycloudflare"
             }
           }
